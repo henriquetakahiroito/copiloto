@@ -2,6 +2,7 @@
 e manda o comando pro orquestrador. Ctrl+C encerra."""
 
 import asyncio
+import sys
 from pathlib import Path
 
 import yaml
@@ -29,6 +30,29 @@ def parse_hotkey(spec: str) -> set:
     return keys
 
 
+def build_orchestrator(config: dict) -> Orchestrator:
+    """Monta o orquestrador a partir do config. Compartilhado pelo modo de
+    voz e pelo modo texto — ambos falam com os mesmos MCP servers."""
+    mcp_configs = [
+        MCPServerConfig(
+            name=name,
+            command=cfg["command"],
+            args=cfg["args"],
+            tool_prefix=cfg["tool_prefix"],
+        )
+        for name, cfg in config["mcp_servers"].items()
+    ]
+    persona_path = Path(__file__).parent / config["persona"]["system_prompt_file"]
+    return Orchestrator(
+        api_key=None,  # usa a variável de ambiente ANTHROPIC_API_KEY
+        model=config["llm"]["model"],
+        max_tokens=config["llm"]["max_tokens"],
+        max_tool_turns=config["llm"]["max_tool_turns"],
+        persona_path=persona_path,
+        mcp_configs=mcp_configs,
+    )
+
+
 class PushToTalkApp:
     def __init__(self, config: dict):
         self.config = config
@@ -44,24 +68,7 @@ class PushToTalkApp:
             compute_type=config["stt"]["compute_type"],
             language=config["stt"]["language"],
         )
-        mcp_configs = [
-            MCPServerConfig(
-                name=name,
-                command=cfg["command"],
-                args=cfg["args"],
-                tool_prefix=cfg["tool_prefix"],
-            )
-            for name, cfg in config["mcp_servers"].items()
-        ]
-        persona_path = Path(__file__).parent / config["persona"]["system_prompt_file"]
-        self.orchestrator = Orchestrator(
-            api_key=None,  # usa a variável de ambiente ANTHROPIC_API_KEY
-            model=config["llm"]["model"],
-            max_tokens=config["llm"]["max_tokens"],
-            max_tool_turns=config["llm"]["max_tool_turns"],
-            persona_path=persona_path,
-            mcp_configs=mcp_configs,
-        )
+        self.orchestrator = build_orchestrator(config)
         self._recording = False
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -107,11 +114,37 @@ class PushToTalkApp:
             await self.orchestrator.stop()
 
 
-def main() -> None:
-    config = load_config()
-    app = PushToTalkApp(config)
+async def run_text_mode(config: dict) -> None:
+    """Modo texto: digita o comando em vez de falar. Mesmo orquestrador e
+    MCP servers do modo de voz, sem microfone, hotkey nem modelo de STT.
+    Útil pra testar Blender/FreeCAD sem depender do áudio."""
+    orchestrator = build_orchestrator(config)
+    await orchestrator.start()
+    print("Copiloto (modo texto) pronto. Digite o comando e Enter.")
+    print("Linha vazia ou Ctrl+C para sair.")
     try:
-        asyncio.run(app.run())
+        while True:
+            try:
+                text = (await asyncio.to_thread(input, "> ")).strip()
+            except EOFError:
+                break
+            if not text:
+                break
+            reply = await orchestrator.handle_command(text)
+            print(f"< {reply}")
+    finally:
+        await orchestrator.stop()
+
+
+def main() -> None:
+    text_mode = "--text" in sys.argv[1:]
+    config = load_config()
+    try:
+        if text_mode:
+            asyncio.run(run_text_mode(config))
+        else:
+            app = PushToTalkApp(config)
+            asyncio.run(app.run())
     except KeyboardInterrupt:
         print("\nEncerrando.")
 

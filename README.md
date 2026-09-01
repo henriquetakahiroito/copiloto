@@ -37,6 +37,20 @@ Segure `ctrl+space` (ajustável em `config.yaml`), fale o comando, solte.
 O texto transcrito aparece no terminal, seguido da confirmação do
 copiloto.
 
+### Modo texto (sem microfone)
+
+Pra testar o orquestrador e os MCP servers sem depender de áudio nem da
+hotkey, rode com `--text`:
+
+```bash
+python main.py --text
+```
+
+Aparece um prompt `>`; digite o comando e Enter. Vai pro mesmo
+orquestrador (Blender/FreeCAD via API), sem carregar o modelo de STT.
+Linha vazia ou `Ctrl+C` encerra. Útil pra depurar o roteamento e as tools
+quando você não quer (ou não pode) falar.
+
 ## Ajustes rápidos
 
 - **Hotkey**: campo `hotkey` em `config.yaml`, formato `<ctrl>+<space>`,
