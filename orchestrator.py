@@ -234,13 +234,26 @@ class Orchestrator:
         tools = self._all_tools()
 
         for _ in range(self.max_tool_turns):
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=self.system_prompt,
-                tools=tools,
-                messages=messages,
-            )
+            try:
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    system=self.system_prompt,
+                    tools=tools,
+                    messages=messages,
+                )
+            except anthropic.AuthenticationError:
+                return (
+                    "Erro de autenticação (401): a ANTHROPIC_API_KEY é inválida "
+                    "ou está ausente. Confira a chave em "
+                    "console.anthropic.com e defina-a num terminal novo."
+                )
+            except anthropic.APIStatusError as exc:
+                return f"A API respondeu com erro {exc.status_code}: {_short_error(exc)}"
+            except anthropic.APIConnectionError:
+                return "Não consegui falar com a API da Anthropic — verifique a conexão."
+            except anthropic.AnthropicError as exc:
+                return f"Falha ao chamar a API: {_short_error(exc)}"
 
             if response.stop_reason != "tool_use":
                 return "".join(
