@@ -13,7 +13,7 @@ stt:
   language: "pt"
 
 llm:
-  model: "claude-sonnet-4-6"
+  model: "claude-sonnet-4-5"
   max_tokens: 1024
   max_tool_turns: 6          # limite de idas e vindas de tool-use por comando
 
