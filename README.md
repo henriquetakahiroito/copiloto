@@ -51,6 +51,27 @@ orquestrador (Blender/FreeCAD via API), sem carregar o modelo de STT.
 Linha vazia ou `Ctrl+C` encerra. Útil pra depurar o roteamento e as tools
 quando você não quer (ou não pode) falar.
 
+### Um app ou os dois
+
+A inicialização é tolerante: o copiloto conecta no que estiver de pé.
+Se só o Blender estiver aberto, ele sobe com as tools do Blender e avisa
+que o FreeCAD ficou de fora — e vice-versa. Não trava mais esperando os
+dois. (A chave `ANTHROPIC_API_KEY` só é exigida na hora de mandar um
+comando de fato, não pra conectar.)
+
+### Conferir a conexão (`--dry-run`)
+
+Pra confirmar rapidamente quais apps estão conectados e quais tools cada
+um expôs, sem chamar a API:
+
+```bash
+python main.py --dry-run
+```
+
+Lista as ferramentas de cada servidor conectado e sai. Bom pra rodar
+antes de começar, só pra ter certeza de que o Blender e/ou o FreeCAD
+estão respondendo.
+
 ## Ajustes rápidos
 
 - **Hotkey**: campo `hotkey` em `config.yaml`, formato `<ctrl>+<space>`,

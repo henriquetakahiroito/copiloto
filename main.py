@@ -2,8 +2,12 @@
 e manda o comando pro orquestrador. Ctrl+C encerra."""
 
 import asyncio
+import os
 import sys
 from pathlib import Path
+
+# Silencia avisos ruidosos do Hugging Face na primeira carga do modelo de voz.
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
 import yaml
 from pynput import keyboard
@@ -136,11 +140,33 @@ async def run_text_mode(config: dict) -> None:
         await orchestrator.stop()
 
 
+async def run_dry_run(config: dict) -> None:
+    """Conecta nos MCP servers, lista as tools que cada app expôs e sai.
+    Não chama a API nem exige ANTHROPIC_API_KEY — serve pra confirmar
+    rapidamente quais apps (Blender/FreeCAD) estão conectados."""
+    orchestrator = build_orchestrator(config)
+    await orchestrator.start()
+    try:
+        print("\n--- ferramentas disponíveis ---")
+        for bridge in orchestrator.bridges:
+            if not bridge.connected:
+                print(f"{bridge.config.name}: (desconectado)")
+                continue
+            names = sorted(bridge.tool_map.keys())
+            print(f"{bridge.config.name}: {len(names)} tools")
+            for name in names:
+                print(f"  - {name}")
+    finally:
+        await orchestrator.stop()
+
+
 def main() -> None:
-    text_mode = "--text" in sys.argv[1:]
+    args = sys.argv[1:]
     config = load_config()
     try:
-        if text_mode:
+        if "--dry-run" in args:
+            asyncio.run(run_dry_run(config))
+        elif "--text" in args:
             asyncio.run(run_text_mode(config))
         else:
             app = PushToTalkApp(config)

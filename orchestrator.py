@@ -3,6 +3,7 @@ FreeCAD via API da Anthropic, roteando cada pedido para a ferramenta certa."""
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,11 +30,23 @@ class MCPBridge:
         self.config = config
         self._session: ClientSession | None = None
         self._stack = contextlib.AsyncExitStack()
+        self.connected = False
         self.anthropic_tools: list[dict[str, Any]] = []
         # nome prefixado (ex: "blender_create_object") -> nome real na MCP
         self.tool_map: dict[str, str] = {}
 
-    async def connect(self) -> None:
+    async def connect(self, timeout: float = 60.0) -> None:
+        """Conecta ao MCP server com timeout. Se falhar, limpa o próprio
+        stack e propaga o erro — o orquestrador decide como reagir."""
+        try:
+            await asyncio.wait_for(self._connect(), timeout)
+            self.connected = True
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await self._stack.aclose()
+            raise
+
+    async def _connect(self) -> None:
         params = StdioServerParameters(command=self.config.command, args=self.config.args)
         read, write = await self._stack.enter_async_context(stdio_client(params))
         self._session = await self._stack.enter_async_context(ClientSession(read, write))
@@ -78,16 +91,41 @@ class Orchestrator:
         persona_path: Path,
         mcp_configs: list[MCPServerConfig],
     ):
-        self.client = anthropic.Anthropic(api_key=api_key)
+        self._api_key = api_key
+        self._client: anthropic.Anthropic | None = None
         self.model = model
         self.max_tokens = max_tokens
         self.max_tool_turns = max_tool_turns
         self.system_prompt = persona_path.read_text(encoding="utf-8")
         self.bridges = [MCPBridge(cfg) for cfg in mcp_configs]
 
+    @property
+    def client(self) -> anthropic.Anthropic:
+        """Cliente Anthropic criado sob demanda — assim start()/dry-run
+        funcionam sem ANTHROPIC_API_KEY; a chave só é exigida ao enviar
+        um comando de fato."""
+        if self._client is None:
+            self._client = anthropic.Anthropic(api_key=self._api_key)
+        return self._client
+
     async def start(self) -> None:
+        """Conecta no que estiver disponível. Um app fora do ar não impede
+        o outro nem trava a inicialização."""
         for bridge in self.bridges:
-            await bridge.connect()
+            try:
+                await bridge.connect()
+                print(
+                    f"[mcp] conectado: {bridge.config.name} "
+                    f"({len(bridge.anthropic_tools)} tools)"
+                )
+            except Exception as exc:
+                print(f"[mcp] falhou: {bridge.config.name} — {exc}")
+        if not any(b.connected for b in self.bridges):
+            print(
+                "[mcp] nenhum servidor conectado — os comandos não terão "
+                "ferramentas disponíveis. Abra Blender/FreeCAD com os MCP "
+                "servers ligados."
+            )
 
     async def stop(self) -> None:
         for bridge in self.bridges:
@@ -96,7 +134,8 @@ class Orchestrator:
     def _all_tools(self) -> list[dict[str, Any]]:
         tools: list[dict[str, Any]] = []
         for bridge in self.bridges:
-            tools.extend(bridge.anthropic_tools)
+            if bridge.connected:
+                tools.extend(bridge.anthropic_tools)
         return tools
 
     async def _dispatch_tool(self, name: str, arguments: dict[str, Any]) -> str:
