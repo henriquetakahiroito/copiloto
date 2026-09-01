@@ -1,0 +1,34 @@
+# Configuração do copiloto. Ajuste aqui antes de rodar.
+
+hotkey: "<ctrl>+<space>"   # segure para gravar, solte para transcrever e enviar
+
+audio:
+  sample_rate: 16000
+  device: null              # null = dispositivo de entrada padrão do sistema
+
+stt:
+  model: "small"            # tiny | base | small | medium | large-v3
+  device: "cpu"              # cpu | cuda (se tiver GPU disponível)
+  compute_type: "int8"       # int8 é o mais leve para CPU
+  language: "pt"
+
+llm:
+  model: "claude-sonnet-4-6"
+  max_tokens: 1024
+  max_tool_turns: 6          # limite de idas e vindas de tool-use por comando
+
+mcp_servers:
+  blender:
+    command: "uvx"
+    args: ["blender-mcp"]
+    tool_prefix: "blender_"
+  freecad:
+    command: "uvx"
+    args: ["freecad-mcp"]
+    tool_prefix: "freecad_"
+
+persona:
+  system_prompt_file: "persona.md"
+
+feedback:
+  voice: false                # ative depois se quiser TTS
