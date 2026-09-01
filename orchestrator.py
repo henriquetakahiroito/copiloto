@@ -56,11 +56,15 @@ class MCPBridge:
         for tool in tools_result.tools:
             prefixed = f"{self.config.tool_prefix}{tool.name}"
             self.tool_map[prefixed] = tool.name
+            # mcp >=2 usa input_schema; versões antigas, inputSchema.
+            schema = getattr(tool, "input_schema", None)
+            if schema is None:
+                schema = getattr(tool, "inputSchema", None)
             self.anthropic_tools.append(
                 {
                     "name": prefixed,
                     "description": tool.description or "",
-                    "input_schema": tool.inputSchema,
+                    "input_schema": schema or {"type": "object", "properties": {}},
                 }
             )
 
