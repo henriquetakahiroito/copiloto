@@ -13,9 +13,14 @@ stt:
   language: "pt"
 
 llm:
-  model: "claude-sonnet-4-5"
+  provider: "anthropic"      # "anthropic" (API paga) ou "ollama" (local, grátis)
+  model: "claude-sonnet-4-5" # usado quando provider = anthropic
   max_tokens: 1024
   max_tool_turns: 6          # limite de idas e vindas de tool-use por comando
+  ollama:                    # usado quando provider = ollama
+    model: "qwen2.5:7b"      # precisa suportar tool-calling (qwen2.5, llama3.1...)
+    host: "http://localhost:11434"
+    timeout: 300             # modelos locais podem ser lentos; segundos
 
 mcp_servers:
   blender:

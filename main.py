@@ -13,6 +13,7 @@ import yaml
 from pynput import keyboard
 
 from audio import PushToTalkRecorder, Transcriber
+from llm import make_backend
 from orchestrator import MCPServerConfig, Orchestrator
 
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
@@ -35,8 +36,9 @@ def parse_hotkey(spec: str) -> set:
 
 
 def build_orchestrator(config: dict) -> Orchestrator:
-    """Monta o orquestrador a partir do config. Compartilhado pelo modo de
-    voz e pelo modo texto — ambos falam com os mesmos MCP servers."""
+    """Monta o orquestrador a partir do config. Compartilhado pelos modos de
+    voz, texto e dry-run — todos falam com os mesmos MCP servers. O backend
+    de LLM (anthropic ou ollama) é escolhido pelo bloco `llm` do config."""
     mcp_configs = [
         MCPServerConfig(
             name=name,
@@ -47,14 +49,9 @@ def build_orchestrator(config: dict) -> Orchestrator:
         for name, cfg in config["mcp_servers"].items()
     ]
     persona_path = Path(__file__).parent / config["persona"]["system_prompt_file"]
-    return Orchestrator(
-        api_key=None,  # usa a variável de ambiente ANTHROPIC_API_KEY
-        model=config["llm"]["model"],
-        max_tokens=config["llm"]["max_tokens"],
-        max_tool_turns=config["llm"]["max_tool_turns"],
-        persona_path=persona_path,
-        mcp_configs=mcp_configs,
-    )
+    system_prompt = persona_path.read_text(encoding="utf-8")
+    backend = make_backend(config["llm"], system_prompt)
+    return Orchestrator(backend=backend, mcp_configs=mcp_configs)
 
 
 class PushToTalkApp:

@@ -1,16 +1,17 @@
 """Orquestrador: liga o comando transcrito aos MCP servers do Blender e do
-FreeCAD via API da Anthropic, roteando cada pedido para a ferramenta certa."""
+FreeCAD, roteando cada pedido para a ferramenta certa. O 'cérebro' que decide
+qual tool chamar é um backend de LLM plugável (ver llm.py)."""
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
-import anthropic
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+
+from llm import _short_error
 
 
 @dataclass
@@ -25,18 +26,9 @@ class MCPServerConfig:
 _SHUTDOWN = object()
 
 
-def _short_error(exc: BaseException) -> str:
-    """Extrai uma mensagem legível — o anyio embrulha falhas de conexão num
-    ExceptionGroup ('unhandled errors in a TaskGroup') que esconde a causa."""
-    while isinstance(exc, BaseExceptionGroup) and exc.exceptions:
-        exc = exc.exceptions[0]
-    text = str(exc).strip()
-    return text or exc.__class__.__name__
-
-
 class MCPBridge:
     """Mantém uma sessão MCP viva com um app (Blender ou FreeCAD) e expõe
-    suas tools já convertidas pro formato de tool-use da Anthropic.
+    suas tools num formato neutro (cada backend de LLM converte pro seu).
 
     Todo o ciclo de vida do MCP (abrir stdio, inicializar sessão, chamar
     tools, fechar) roda dentro de UMA task dedicada (`_run`). Isso é
@@ -49,7 +41,9 @@ class MCPBridge:
     def __init__(self, config: MCPServerConfig):
         self.config = config
         self.connected = False
-        self.anthropic_tools: list[dict[str, Any]] = []
+        # tools em formato neutro ({name, description, input_schema});
+        # cada backend de LLM converte pro seu protocolo.
+        self.tools: list[dict[str, Any]] = []
         # nome prefixado (ex: "blender_create_object") -> nome real na MCP
         self.tool_map: dict[str, str] = {}
         self._task: asyncio.Task | None = None
@@ -104,7 +98,7 @@ class MCPBridge:
             schema = getattr(tool, "input_schema", None)
             if schema is None:
                 schema = getattr(tool, "inputSchema", None)
-            self.anthropic_tools.append(
+            self.tools.append(
                 {
                     "name": prefixed,
                     "description": tool.description or "",
@@ -165,31 +159,10 @@ class MCPBridge:
 
 
 class Orchestrator:
-    def __init__(
-        self,
-        api_key: str | None,
-        model: str,
-        max_tokens: int,
-        max_tool_turns: int,
-        persona_path: Path,
-        mcp_configs: list[MCPServerConfig],
-    ):
-        self._api_key = api_key
-        self._client: anthropic.Anthropic | None = None
-        self.model = model
-        self.max_tokens = max_tokens
-        self.max_tool_turns = max_tool_turns
-        self.system_prompt = persona_path.read_text(encoding="utf-8")
+    def __init__(self, backend: Any, mcp_configs: list[MCPServerConfig]):
+        # backend: objeto com `async run(text, tools, dispatch) -> str` (ver llm.py)
+        self.backend = backend
         self.bridges = [MCPBridge(cfg) for cfg in mcp_configs]
-
-    @property
-    def client(self) -> anthropic.Anthropic:
-        """Cliente Anthropic criado sob demanda — assim start()/dry-run
-        funcionam sem ANTHROPIC_API_KEY; a chave só é exigida ao enviar
-        um comando de fato."""
-        if self._client is None:
-            self._client = anthropic.Anthropic(api_key=self._api_key)
-        return self._client
 
     async def start(self) -> None:
         """Conecta no que estiver disponível. Um app fora do ar não impede
@@ -199,7 +172,7 @@ class Orchestrator:
                 await bridge.connect()
                 print(
                     f"[mcp] conectado: {bridge.config.name} "
-                    f"({len(bridge.anthropic_tools)} tools)"
+                    f"({len(bridge.tools)} tools)"
                 )
             except Exception as exc:
                 print(f"[mcp] falhou: {bridge.config.name} — {_short_error(exc)}")
@@ -218,7 +191,7 @@ class Orchestrator:
         tools: list[dict[str, Any]] = []
         for bridge in self.bridges:
             if bridge.connected:
-                tools.extend(bridge.anthropic_tools)
+                tools.extend(bridge.tools)
         return tools
 
     async def _dispatch_tool(self, name: str, arguments: dict[str, Any]) -> str:
@@ -228,52 +201,6 @@ class Orchestrator:
         return f"erro: tool '{name}' não encontrada em nenhum MCP server conectado"
 
     async def handle_command(self, text: str) -> str:
-        """Envia o comando transcrito pro modelo, executa as tools necessárias
-        no app certo e devolve a resposta final (tom já vem do system prompt)."""
-        messages: list[dict[str, Any]] = [{"role": "user", "content": text}]
-        tools = self._all_tools()
-
-        for _ in range(self.max_tool_turns):
-            try:
-                response = self.client.messages.create(
-                    model=self.model,
-                    max_tokens=self.max_tokens,
-                    system=self.system_prompt,
-                    tools=tools,
-                    messages=messages,
-                )
-            except anthropic.AuthenticationError:
-                return (
-                    "Erro de autenticação (401): a ANTHROPIC_API_KEY é inválida "
-                    "ou está ausente. Confira a chave em "
-                    "console.anthropic.com e defina-a num terminal novo."
-                )
-            except anthropic.APIStatusError as exc:
-                return f"A API respondeu com erro {exc.status_code}: {_short_error(exc)}"
-            except anthropic.APIConnectionError:
-                return "Não consegui falar com a API da Anthropic — verifique a conexão."
-            except anthropic.AnthropicError as exc:
-                return f"Falha ao chamar a API: {_short_error(exc)}"
-
-            if response.stop_reason != "tool_use":
-                return "".join(
-                    block.text for block in response.content if block.type == "text"
-                ).strip()
-
-            messages.append({"role": "assistant", "content": response.content})
-
-            tool_results = []
-            for block in response.content:
-                if block.type != "tool_use":
-                    continue
-                result_text = await self._dispatch_tool(block.name, block.input)
-                tool_results.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result_text,
-                    }
-                )
-            messages.append({"role": "user", "content": tool_results})
-
-        return "Muitas idas e vindas nessa tarefa — quebra em partes menores?"
+        """Manda o comando pro backend de LLM, que decide e executa as tools
+        (via _dispatch_tool) no app certo, e devolve a resposta final."""
+        return await self.backend.run(text, self._all_tools(), self._dispatch_tool)
