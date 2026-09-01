@@ -3,7 +3,6 @@ FreeCAD via API da Anthropic, roteando cada pedido para a ferramenta certa."""
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,11 +34,13 @@ class MCPBridge:
         # nome prefixado (ex: "blender_create_object") -> nome real na MCP
         self.tool_map: dict[str, str] = {}
 
-    async def connect(self, timeout: float = 60.0) -> None:
-        """Conecta ao MCP server com timeout. Se falhar, limpa o próprio
-        stack e propaga o erro — o orquestrador decide como reagir."""
+    async def connect(self) -> None:
+        """Conecta ao MCP server. Se falhar, limpa o próprio stack e propaga
+        o erro — o orquestrador decide como reagir. Sem wrappers de task
+        (ex: wait_for): os cancel scopes do stdio_client precisam ser abertos
+        e fechados na mesma task, senão o anyio reclama no encerramento."""
         try:
-            await asyncio.wait_for(self._connect(), timeout)
+            await self._connect()
             self.connected = True
         except BaseException:
             with contextlib.suppress(Exception):
